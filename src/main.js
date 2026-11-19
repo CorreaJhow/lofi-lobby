@@ -126,6 +126,10 @@ Object.assign(sun.shadow.camera, {
   bottom: -80,
   far: 300,
 });
+// Without bias the shadow map shades the surfaces it comes from (curved bands),
+// hidden by the dim moon but obvious under the day sun.
+sun.shadow.bias = -0.0005;
+sun.shadow.normalBias = 0.05;
 scene.add(sun);
 
 function resize() {
