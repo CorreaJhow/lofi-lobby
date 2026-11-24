@@ -188,10 +188,8 @@
     const typing = ["INPUT", "TEXTAREA"].includes(document.activeElement?.tagName);
     if (!typing && !e.repeat && e.key.toLowerCase() === "m") toggleMute();
   });
-  // admin mode: open with ?admin=PASSWORD once (it's saved); ?admin= (empty) turns it off.
-  // The password is checked on the server (ADMIN_PASSWORD secret); here it only shows the buttons.
-  const p = new URLSearchParams(location.search).get("admin");
-  try { if (p !== null) localStorage.setItem("admin-password", p); } catch {}
+  // admin mode: type /admin in the chat and the password (it's saved after the server accepts it);
+  // /logout leaves. The server checks the password (ADMIN_PASSWORD secret); here it only shows the buttons.
   let isAdmin = false;
   try { isAdmin = !!localStorage.getItem("admin-password"); } catch {}
   const panel = document.querySelector("#admin");

@@ -15,6 +15,7 @@
 - Progressive mute for chat spam (rate exceeded, or the same text 4+ times in a row): warning, then 15 s, 1 min, 5 min, 30 min.
 
 ### Changed
+- Admin login: type `/admin` in the chat and then the password (a hidden field) instead of `?admin=` in the URL; `/logout` leaves. Admin lock is looser: 20 tries, then 1 minute.
 - You come back where you were: the position is remembered in the browser and sent when you (re)connect, so others see you in the right spot even if you stand still.
 - The chat box stays open after sending, so you can keep talking; Esc or Enter on an empty box goes back to walking.
 - Room limit raised from 40 to 100 players.

@@ -1224,6 +1224,7 @@ function updateCount() {
     el.textContent = `room ${ROOM} · ${others.size + 1} trainer${others.size ? "s" : ""}`;
 }
 
+let pendingPassword = ""; // typed after /admin, saved only if the server accepts it
 let kicked = false; // kicked or banned: stay out instead of reconnecting
 function connect() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
@@ -1252,6 +1253,11 @@ function connect() {
       elEnterName.value = NAME;
       try { localStorage.setItem("name", NAME); } catch {}
       addToHistory("system", m.msg);
+    } else if (m.t === "admin-ok") {
+      // the server accepted the password typed after /admin: keep it and reload to show the controls
+      try { localStorage.setItem("admin-password", pendingPassword); } catch {}
+      addToHistory("system", "admin ok");
+      setTimeout(() => location.reload(), 600);
     } else if (m.t === "kicked") {
       kicked = true;
       addToHistory("system", m.msg);
@@ -1461,8 +1467,28 @@ function receiveChat(id, name, text) {
 document.querySelector("#send").addEventListener("pointerdown", (e) => e.preventDefault());
 document.querySelector("#chat form").addEventListener("submit", (e) => {
   e.preventDefault();
+  // after /admin the box is a password field: this Enter logs in (never goes to the chat)
+  if (elInput.type === "password") {
+    pendingPassword = elInput.value;
+    elInput.value = "";
+    leavePasswordMode();
+    if (pendingPassword && ws?.readyState === 1)
+      ws.send(JSON.stringify({ t: "auth", password: pendingPassword }));
+    return;
+  }
   const text = elInput.value.trim().slice(0, 140);
   elInput.value = "";
+  if (/^\/admin$/i.test(text)) {
+    elInput.type = "password";
+    elInput.placeholder = "admin password, Enter to log in";
+    elInput.focus();
+    return;
+  }
+  if (/^\/logout$/i.test(text)) {
+    try { localStorage.removeItem("admin-password"); } catch {}
+    location.reload();
+    return;
+  }
   // the box stays open to keep talking; Enter on an empty box (or Esc) goes back to walking
   if (!text) {
     if (!MOBILE) elInput.blur();
@@ -1487,11 +1513,21 @@ addEventListener("keydown", (e) => {
   } else if (e.key === "Escape" && typing()) elInput.blur();
 });
 const idlePlaceholder = elInput.placeholder;
+function leavePasswordMode() {
+  elInput.type = "text";
+  elInput.placeholder = document.activeElement === elInput && !MOBILE ? "Esc or empty Enter to walk…" : idlePlaceholder;
+}
 elInput.addEventListener("focus", () => {
   Object.keys(keys).forEach((k) => (keys[k] = false));
   if (!MOBILE) elInput.placeholder = "Esc or empty Enter to walk…";
 });
-elInput.addEventListener("blur", () => !MOBILE && (elInput.placeholder = idlePlaceholder));
+elInput.addEventListener("blur", () => {
+  if (elInput.type === "password") {
+    elInput.value = "";
+    elInput.type = "text";
+  }
+  if (!MOBILE) elInput.placeholder = idlePlaceholder;
+});
 
 function loop() {
   const dt = Math.min(clock.getDelta(), 0.05);

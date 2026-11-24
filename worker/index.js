@@ -3,6 +3,7 @@
 //   client -> server: { t: "hello", name, gender, x, z, dir } | { t: "pos", x, z, dir, step }
 //                     { t: "chat", text } | { t: "name", name } | { t: "gender", gender }
 //                     { t: "radio", idx, password }   (admin)
+//                     { t: "auth", password }   (admin login: answered with admin-ok or an error)
 //                     { t: "mod", action: "kick"|"ban"|"unban", id, password }   (admin)
 //   server -> client: { t: "you", id } | { t: "state", players: [...] }
 //                     { t: "joined", player } | { t: "left", id } | { t: "pos", ... }
@@ -27,8 +28,8 @@ const MAX_PLAYERS = 100;
 const ROOMS = ["lobby"];
 const MAX_BYTES = 1024;
 const COORD_LIMIT = 500;
-const ADMIN_ATTEMPTS = 5; // per IP, then locked for ADMIN_LOCK_MS
-const ADMIN_LOCK_MS = 15 * 60_000;
+const ADMIN_ATTEMPTS = 20; // per IP, then locked for ADMIN_LOCK_MS (the "other" rate limit already caps tries at ~1/s)
+const ADMIN_LOCK_MS = 60_000;
 const MAX_PER_IP = 3; // tabs/devices behind one IP
 const KICK_MS = 10 * 60_000; // kick = a short ban, so the client's auto-reconnect doesn't undo it
 const BAN_MS = 7 * 24 * 60 * 60_000;
@@ -166,6 +167,8 @@ export class Room {
       p.step = Math.abs(m.step | 0) % 4;
       ws.serializeAttachment(p);
       this.broadcast({ t: "pos", id: p.id, x: p.x, z: p.z, dir: p.dir, step: p.step }, ws);
+    } else if (m.t === "auth") {
+      if (await this.isAdmin(ws, p, m.password)) ws.send(JSON.stringify({ t: "admin-ok" }));
     } else if (m.t === "mod") {
       if (!(await this.isAdmin(ws, p, m.password))) return;
       await this.moderate(ws, m.action, cleanText(m.id, 16));
@@ -202,7 +205,8 @@ export class Room {
 
   // failures counted per IP in storage, so reconnecting doesn't reset them
   async isAdmin(ws, p, password) {
-    const lockKey = "admin-fail:" + p.ip;
+    // bump the "v3" prefix to drop every stored lock
+    const lockKey = "admin-fail-v3:" + p.ip;
     const lock = (await this.state.storage.get(lockKey)) || { fails: 0, until: 0 };
     if (lock.until > Date.now()) {
       ws.send(JSON.stringify({ t: "error", msg: "admin locked, try later" }));
