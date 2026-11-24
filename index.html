@@ -73,6 +73,16 @@
   #my-name:hover { text-decoration: underline; }
   #name-input { font: inherit; font-size: 11px; color: #F2F2F5; background: rgba(0,0,0,.4); width: 120px;
               border: 1px solid #ffc95a; border-radius: 4px; padding: 2px 6px; outline: none; }
+  #admin-login { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 20;
+                 display: flex; flex-direction: column; gap: 10px; padding: 18px; width: min(300px, calc(100vw - 32px)); }
+  #admin-login[hidden] { display: none; }
+  #admin-login b { font-size: 12px; color: #ffc95a; }
+  #admin-login input { font: inherit; font-size: 13px; color: #F2F2F5; background: rgba(0,0,0,.45);
+                       border: 1px solid rgba(255,255,255,.16); border-radius: 6px; padding: 8px 10px; }
+  #admin-login div { display: flex; gap: 8px; justify-content: flex-end; }
+  #admin-login button { font: inherit; font-size: 11px; color: #F2F2F5; background: rgba(0,0,0,.4); cursor: pointer;
+                        border: 1px solid rgba(255,255,255,.16); border-radius: 6px; padding: 5px 12px; }
+  #admin-login button[type=submit] { border-color: #ffc95a; color: #ffc95a; }
   #admin { display: flex; gap: 6px; margin-top: 8px; }
   #admin[hidden] { display: none; }
   #admin button { font: inherit; font-size: 14px; color: #F2F2F5; background: rgba(0,0,0,.4);
@@ -140,6 +150,10 @@
   <div class="me">you: <button id="my-name" title="change name"></button> ✎</div>
   <button id="switch-trainer" title="switch trainer (G)">switch trainer · G</button><button id="day-night" type="button" title="make it day (N)">make it day · N</button><button id="pause-btn" type="button">pause</button>
 </div>
+<form id="admin-login" class="glass" hidden autocomplete="off"><b>admin login</b>
+  <input type="password" placeholder="password" aria-label="admin password" />
+  <div><button type="button" data-cancel>cancel</button><button type="submit">log in</button></div>
+</form>
 <div id="hint" class="glass">arrows / WASD to walk · Shift to run · M to mute · N for day/night · space to pause</div>
 <div id="radio" class="glass">
   <div class="tv"><div id="yt"></div></div>

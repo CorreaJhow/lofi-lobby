@@ -40,7 +40,7 @@ Open the URL, pick a trainer and press **enter the room**: the click is what let
 | Space | pause the music for you only |
 
 - There is one room, `lobby`, for everyone (the server refuses any other name).
-- Admin: type `/admin` in the chat, then the password (`ADMIN_PASSWORD`); `/logout` leaves. Then you can restart or skip the song for everyone, and click a player's name (above them or in the chat) to kick or ban them; `/unban` in the chat lifts every ban.
+- Admin: type `/admin` in the chat and enter the password in the login box (`ADMIN_PASSWORD`); `/logout` leaves. Then you can restart or skip the song for everyone, and click a player's name (above them or in the chat) to kick or ban them; `/unban` in the chat lifts every ban.
 - Change the song list in [`src/radio.js`](src/radio.js) (`LISTA`, YouTube video ids).
 
 ## Architecture

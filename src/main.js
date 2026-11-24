@@ -1338,7 +1338,8 @@ function updateOthers(dt) {
 const elMsgs = document.querySelector("#msgs");
 const elInput = document.querySelector("#msg");
 const bubbles = new Map(); // owner (mesh) -> { el, until }
-const typing = () => document.activeElement === elInput;
+// any text field (chat or the admin login): game keys and the Enter shortcut stay out of it
+const typing = () => ["INPUT", "TEXTAREA"].includes(document.activeElement?.tagName);
 
 function addToHistory(name, text, id) {
   const d = document.createElement("div");
@@ -1467,23 +1468,9 @@ function receiveChat(id, name, text) {
 document.querySelector("#send").addEventListener("pointerdown", (e) => e.preventDefault());
 document.querySelector("#chat form").addEventListener("submit", (e) => {
   e.preventDefault();
-  // after /admin the box is a password field: this Enter logs in (never goes to the chat)
-  if (elInput.type === "password") {
-    pendingPassword = elInput.value;
-    elInput.value = "";
-    leavePasswordMode();
-    if (pendingPassword && ws?.readyState === 1)
-      ws.send(JSON.stringify({ t: "auth", password: pendingPassword }));
-    return;
-  }
   const text = elInput.value.trim().slice(0, 140);
   elInput.value = "";
-  if (/^\/admin$/i.test(text)) {
-    elInput.type = "password";
-    elInput.placeholder = "admin password, Enter to log in";
-    elInput.focus();
-    return;
-  }
+  if (/^\/admin$/i.test(text)) return openAdminLogin();
   if (/^\/logout$/i.test(text)) {
     try { localStorage.removeItem("admin-password"); } catch {}
     location.reload();
@@ -1513,21 +1500,33 @@ addEventListener("keydown", (e) => {
   } else if (e.key === "Escape" && typing()) elInput.blur();
 });
 const idlePlaceholder = elInput.placeholder;
-function leavePasswordMode() {
-  elInput.type = "text";
-  elInput.placeholder = document.activeElement === elInput && !MOBILE ? "Esc or empty Enter to walk…" : idlePlaceholder;
+// admin login: its own modal with a password field, so the password can never end up in the chat
+const adminLogin = document.querySelector("#admin-login");
+const adminPw = adminLogin.querySelector("input");
+function openAdminLogin() {
+  elInput.blur();
+  adminPw.value = "";
+  adminLogin.hidden = false;
+  adminPw.focus();
 }
+function closeAdminLogin() {
+  adminPw.value = "";
+  adminLogin.hidden = true;
+}
+adminLogin.addEventListener("submit", (e) => {
+  e.preventDefault();
+  pendingPassword = adminPw.value;
+  closeAdminLogin();
+  if (pendingPassword && ws?.readyState === 1)
+    ws.send(JSON.stringify({ t: "auth", password: pendingPassword }));
+});
+adminLogin.querySelector("[data-cancel]").addEventListener("click", closeAdminLogin);
+adminPw.addEventListener("keydown", (e) => e.key === "Escape" && closeAdminLogin());
 elInput.addEventListener("focus", () => {
   Object.keys(keys).forEach((k) => (keys[k] = false));
   if (!MOBILE) elInput.placeholder = "Esc or empty Enter to walk…";
 });
-elInput.addEventListener("blur", () => {
-  if (elInput.type === "password") {
-    elInput.value = "";
-    elInput.type = "text";
-  }
-  if (!MOBILE) elInput.placeholder = idlePlaceholder;
-});
+elInput.addEventListener("blur", () => !MOBILE && (elInput.placeholder = idlePlaceholder));
 
 function loop() {
   const dt = Math.min(clock.getDelta(), 0.05);

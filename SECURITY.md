@@ -5,7 +5,7 @@ The client is public, so the server trusts nothing it sends.
 ## Access model
 
 - **No accounts.** Anyone with the URL joins a room with a name they pick; names are not unique and prove nothing.
-- **Admin** is one secret, `ADMIN_PASSWORD`, stored only as a Worker secret (and in a git-ignored `.dev.vars` locally). It is typed after `/admin` in the chat (never in the URL), compared in **constant time**, and an IP is blocked for 1 minute after **20 wrong tries** (tries are also rate-limited to about one per second). Admin can restart or skip the song, and kick or ban players.
+- **Admin** is one secret, `ADMIN_PASSWORD`, stored only as a Worker secret (and in a git-ignored `.dev.vars` locally). It is typed in a login box opened by `/admin` (never in the chat box or the URL), compared in **constant time**, and an IP is blocked for 1 minute after **20 wrong tries** (tries are also rate-limited to about one per second). Admin can restart or skip the song, and kick or ban players.
 - **Origin check:** the WebSocket only accepts the site's own origin, plus any listed in `ALLOWED_ORIGINS`. Anything else gets `403`.
 - **Limits per connection:** 1 KB per message; rate limits (token bucket) for positions, chat and everything else; **100 players** per room.
 - **Input is cleaned:** names (16 chars) and chat (140 chars) lose control and bidi characters; coordinates must be finite and within bounds; enums are checked against a list.
