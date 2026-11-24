@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- Admin menu shows who a player is: a short tag of their IP (never the IP), who else is online with it, and the names it used in the last 6 hours.
 - **Chat history**: whoever joins sees the last 30 messages from the last 2 hours.
 - **Moderation**: bad names are refused, bad chat words become `***`, and the admin can kick or ban by clicking a player's name (`/unban` in the chat lifts bans).
 - **Day and night**: a button in the top card (and the N key) switches the town to daytime and back, with a short fade. Only for you, and remembered.

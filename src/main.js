@@ -1253,7 +1253,8 @@ function connect() {
       elEnterName.value = NAME;
       try { localStorage.setItem("name", NAME); } catch {}
       addToHistory("system", m.msg);
-    } else if (m.t === "admin-ok") {
+    } else if (m.t === "who") showWho(m);
+    else if (m.t === "admin-ok") {
       // the server accepted the password typed after /admin: keep it and reload to show the controls
       try { localStorage.setItem("admin-password", pendingPassword); } catch {}
       addToHistory("system", "admin ok");
@@ -1384,8 +1385,14 @@ const modMenu = Object.assign(document.createElement("div"), { id: "mod-menu", c
 document.body.append(modMenu);
 function openModMenu(e, id, name) {
   e.stopPropagation();
+  let password = "";
+  try { password = localStorage.getItem("admin-password") || ""; } catch {}
+  // ask the server who this is (IP tag and other names); the answer fills the menu in (showWho)
+  if (ws?.readyState === 1) ws.send(JSON.stringify({ t: "who", id, password }));
+  modMenu.dataset.id = id;
   modMenu.replaceChildren(
     Object.assign(document.createElement("b"), { textContent: name }),
+    Object.assign(document.createElement("small"), { className: "who", textContent: "…" }),
     ...["kick", "ban"].map((action) => {
       const b = Object.assign(document.createElement("button"), { type: "button", textContent: action });
       b.addEventListener("click", () => {
@@ -1404,6 +1411,14 @@ function openModMenu(e, id, name) {
 addEventListener("pointerdown", (e) => {
   if (!modMenu.hidden && !modMenu.contains(e.target)) modMenu.hidden = true;
 });
+function showWho(m) {
+  const el = modMenu.querySelector(".who");
+  if (!el || modMenu.dataset.id !== m.id) return;
+  const lines = [`#${m.tag}`];
+  if (m.sameTag.length) lines.push(`online too: ${m.sameTag.join(", ")}`);
+  if (m.names.length) lines.push(`also was: ${m.names.join(", ")}`);
+  el.textContent = lines.join("\n");
+}
 
 // ---- Name above each trainer ----
 const nameTags = new Map(); // mesh -> div

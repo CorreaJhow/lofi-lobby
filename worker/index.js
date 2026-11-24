@@ -4,6 +4,7 @@
 //                     { t: "chat", text } | { t: "name", name } | { t: "gender", gender }
 //                     { t: "radio", idx, password }   (admin)
 //                     { t: "auth", password }   (admin login: answered with admin-ok or an error)
+//                     { t: "who", id, password }   (admin: who is this player)
 //                     { t: "mod", action: "kick"|"ban"|"unban", id, password }   (admin)
 //   server -> client: { t: "you", id } | { t: "state", players: [...] }
 //                     { t: "joined", player } | { t: "left", id } | { t: "pos", ... }
@@ -11,6 +12,7 @@
 //                     { t: "gender", id, gender } | { t: "radio", command } | { t: "error", msg }
 //                     { t: "history", messages: [{ id, name, text, at }] } (on join)
 //                     { t: "notice", msg } | { t: "rename", name } (your name was refused)
+//                     { t: "who", id, tag, names, sameTag } (admin only)
 //                     { t: "kicked", msg } (the server closes you; don't reconnect)
 //
 // Security (the client is public, so nothing coming from it is trusted):
@@ -36,6 +38,9 @@ const BAN_MS = 7 * 24 * 60 * 60_000;
 // chat history for people who just arrived: last few messages, only recent ones, never the IP
 const HISTORY_SIZE = 30;
 const HISTORY_MS = 2 * 60 * 60_000;
+// admin sees a short tag per IP (never the IP) and the names used from it in the last hours
+const NAMES_KEEP = 10;
+const NAMES_MS = 6 * 60 * 60_000;
 // progressive mute: each spam strike mutes for longer; strikes are forgotten after STRIKE_RESET_MS quiet
 const MUTE_STEPS_MS = [0, 15_000, 60_000, 5 * 60_000, 30 * 60_000]; // first strike is only a warning
 const STRIKE_RESET_MS = 30 * 60_000;
@@ -152,6 +157,7 @@ export class Room {
       p.dir = DIRS.includes(m.dir) ? m.dir : "down";
       ws.serializeAttachment(p);
       this.broadcast({ t: "joined", player: this.public(p) }, ws);
+      await this.rememberName(p);
     } else if (m.t === "gender") {
       p.gender = gender(m.gender);
       ws.serializeAttachment(p);
@@ -160,6 +166,7 @@ export class Room {
       p.name = this.nameFor(ws, m.name);
       ws.serializeAttachment(p);
       this.broadcast({ t: "name", id: p.id, name: p.name }, ws);
+      await this.rememberName(p);
     } else if (m.t === "pos") {
       p.x = number(m.x);
       p.z = number(m.z);
@@ -169,6 +176,15 @@ export class Room {
       this.broadcast({ t: "pos", id: p.id, x: p.x, z: p.z, dir: p.dir, step: p.step }, ws);
     } else if (m.t === "auth") {
       if (await this.isAdmin(ws, p, m.password)) ws.send(JSON.stringify({ t: "admin-ok" }));
+    } else if (m.t === "who") {
+      if (!(await this.isAdmin(ws, p, m.password))) return;
+      const all = this.state.getWebSockets().map((w) => w.deserializeAttachment()).filter(Boolean);
+      const target = all.find((q) => q.id === cleanText(m.id, 16));
+      if (!target) return;
+      const tag = await this.tagOf(target.ip);
+      const names = (await this.namesOf(tag)).map((n) => n.name).filter((n) => n !== target.name);
+      const sameTag = all.filter((q) => q.ip === target.ip && q.id !== target.id).map((q) => q.name);
+      ws.send(JSON.stringify({ t: "who", id: target.id, tag, names, sameTag }));
     } else if (m.t === "mod") {
       if (!(await this.isAdmin(ws, p, m.password))) return;
       await this.moderate(ws, m.action, cleanText(m.id, 16));
@@ -250,6 +266,27 @@ export class Room {
       this.leave(w);
     }
     tell(`${action === "ban" ? "banned" : "kicked"} ${name}`);
+  }
+
+  // short, stable tag for an IP: HMAC with a random key kept in this room's storage, so it can't
+  // be turned back into the IP or recomputed by anyone else
+  async tagOf(ip) {
+    if (!this.tagKey) {
+      let raw = await this.state.storage.get("tag-key");
+      if (!raw) await this.state.storage.put("tag-key", (raw = [...crypto.getRandomValues(new Uint8Array(32))]));
+      this.tagKey = await crypto.subtle.importKey("raw", new Uint8Array(raw), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    }
+    const sig = new Uint8Array(await crypto.subtle.sign("HMAC", this.tagKey, new TextEncoder().encode(ip)));
+    return [...sig.slice(0, 2)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  }
+  async namesOf(tag) {
+    const all = (await this.state.storage.get("names:" + tag)) || [];
+    return all.filter((n) => n.at > Date.now() - NAMES_MS);
+  }
+  async rememberName(p) {
+    const tag = await this.tagOf(p.ip);
+    const names = (await this.namesOf(tag)).filter((n) => n.name !== p.name);
+    await this.state.storage.put("names:" + tag, [...names, { name: p.name, at: Date.now() }].slice(-NAMES_KEEP));
   }
 
   // kept in storage so it survives the object sleeping (hibernation)

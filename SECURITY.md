@@ -13,6 +13,7 @@ The client is public, so the server trusts nothing it sends.
 - **Static game assets only:** the repo and live site serve the reviewed files in `public/assets/`; visitors cannot upload assets ([ADR 005](docs/adr/005-version-and-deploy-game-assets.md)).
 
 - **Moderation:** names with bad words or porn names are refused and replaced by a random `trainer` name; bad chat words become `***`, and messages with blocked names are dropped ([`worker/moderation.js`](worker/moderation.js)). Text is normalized first (accents, leetspeak, repeated letters). The admin clicks a player's name to kick (10-minute IP ban) or ban (7-day IP ban) them, and `/unban` in the chat clears every ban. Bans are per IP, so people sharing an IP are affected together.
+- **Who is this (admin only):** the kick/ban menu shows a 4-character tag of the player's IP (HMAC with a random key kept in the room, so it can't be turned back into the IP), the other players online with the same tag, and the names used from it in the last 6 hours (last 10). The IP itself is never shown. Same tag means same connection, not certainly the same person (shared networks).
 - **Progressive mute** for chat spam, per IP.
 
 - **Chat history:** the room keeps the last 30 messages from the last 2 hours (name, text, time; never the IP) so people who just joined can read them. Messages are filtered before they are stored, and a banned player's messages are removed.
