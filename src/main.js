@@ -1189,6 +1189,7 @@ function updateCount() {
     el.textContent = `room ${ROOM} · ${others.size + 1} trainer${others.size ? "s" : ""}`;
 }
 
+let kicked = false; // kicked or banned: stay out instead of reconnecting
 function connect() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   ws = new WebSocket(`${proto}://${location.host}/ws/${ROOM}`);
@@ -1202,7 +1203,18 @@ function connect() {
     else if (m.t === "left") removeOther(m.id);
     else if (m.t === "chat") receiveChat(m.id, m.name, m.text);
     else if (m.t === "radio") receiveCommand(m.command);
-    else if (m.t === "error") addToHistory("system", m.msg);
+    else if (m.t === "error" || m.t === "notice") addToHistory("system", m.msg);
+    else if (m.t === "rename") {
+      // the server refused our name and gave us another one
+      NAME = m.name;
+      elName.textContent = NAME;
+      elEnterName.value = NAME;
+      try { localStorage.setItem("name", NAME); } catch {}
+      addToHistory("system", m.msg);
+    } else if (m.t === "kicked") {
+      kicked = true;
+      addToHistory("system", m.msg);
+    }
     else if (m.t === "name") {
       const o = others.get(m.id);
       if (o) o.name = m.name;
@@ -1231,7 +1243,7 @@ function connect() {
   };
   ws.onclose = () => {
     [...others.keys()].forEach(removeOther);
-    setTimeout(connect, 2000); // reconnect
+    if (!kicked) setTimeout(connect, 2000); // reconnect
   };
 }
 const MULTIPLAYER = true;
@@ -1281,11 +1293,15 @@ const elInput = document.querySelector("#msg");
 const bubbles = new Map(); // owner (mesh) -> { el, until }
 const typing = () => document.activeElement === elInput;
 
-function addToHistory(name, text) {
+function addToHistory(name, text, id) {
   const d = document.createElement("div");
   d.className = "m";
   const s = document.createElement("small");
   s.textContent = name;
+  if (IS_ADMIN && id && id !== myId && id !== "me") {
+    s.className = "mod";
+    s.addEventListener("click", (e) => openModMenu(e, id, name));
+  }
   const t = document.createElement("span");
   t.textContent = text; // textContent: no HTML from the chat
   d.append(s, t);
@@ -1313,12 +1329,44 @@ function showBubble(owner, text) {
   b.until = performance.now() + 4000 + text.length * 60; // stays longer if long
 }
 
+// ---- Admin: click a name (above a trainer or in the chat) to kick or ban ----
+let IS_ADMIN = false;
+try { IS_ADMIN = !!localStorage.getItem("admin-password"); } catch {}
+const modMenu = Object.assign(document.createElement("div"), { id: "mod-menu", className: "glass", hidden: true });
+document.body.append(modMenu);
+function openModMenu(e, id, name) {
+  e.stopPropagation();
+  modMenu.replaceChildren(
+    Object.assign(document.createElement("b"), { textContent: name }),
+    ...["kick", "ban"].map((action) => {
+      const b = Object.assign(document.createElement("button"), { type: "button", textContent: action });
+      b.addEventListener("click", () => {
+        let password = "";
+        try { password = localStorage.getItem("admin-password") || ""; } catch {}
+        if (ws?.readyState === 1) ws.send(JSON.stringify({ t: "mod", action, id, password }));
+        modMenu.hidden = true;
+      });
+      return b;
+    }),
+  );
+  modMenu.style.left = `${Math.min(e.clientX, innerWidth - 140)}px`;
+  modMenu.style.top = `${Math.min(e.clientY + 8, innerHeight - 110)}px`;
+  modMenu.hidden = false;
+}
+addEventListener("pointerdown", (e) => {
+  if (!modMenu.hidden && !modMenu.contains(e.target)) modMenu.hidden = true;
+});
+
 // ---- Name above each trainer ----
 const nameTags = new Map(); // mesh -> div
-function nameTag(mesh, name) {
+function nameTag(mesh, name, id) {
   let el = nameTags.get(mesh);
   if (!el) {
     el = Object.assign(document.createElement("div"), { className: "tag" });
+    if (IS_ADMIN && id) {
+      el.classList.add("mod");
+      el.addEventListener("click", (e) => openModMenu(e, id, el.textContent));
+    }
     document.body.append(el);
     nameTags.set(mesh, el);
   }
@@ -1326,7 +1374,7 @@ function nameTag(mesh, name) {
 }
 function updateNameTags() {
   nameTag(sprite, NAME);
-  for (const o of others.values()) nameTag(o.mesh, o.name || "trainer");
+  for (const [id, o] of others) nameTag(o.mesh, o.name || "trainer", id);
   for (const [mesh, el] of nameTags) {
     if (!mesh.parent) { el.remove(); nameTags.delete(mesh); continue; }
     const baseY = mesh === sprite ? pos.y : mesh.position.y;
@@ -1363,7 +1411,7 @@ function updateBubbles() {
 }
 
 function receiveChat(id, name, text) {
-  addToHistory(name, text);
+  addToHistory(name, text, id);
   const owner = id === myId || id === "me" ? sprite : others.get(id)?.mesh;
   if (owner) showBubble(owner, text);
 }
@@ -1374,9 +1422,18 @@ document.querySelector("#chat form").addEventListener("submit", (e) => {
   e.preventDefault();
   const text = elInput.value.trim().slice(0, 140);
   elInput.value = "";
-  // desktop: leave the box so the arrows walk again; phone: keep the keyboard up to keep talking
-  if (!MOBILE) elInput.blur();
-  if (!text) return;
+  // the box stays open to keep talking; Enter on an empty box (or Esc) goes back to walking
+  if (!text) {
+    if (!MOBILE) elInput.blur();
+    return;
+  }
+  // admin: /unban lifts every ban (kick and ban are on the names, see openModMenu)
+  if (/^\/unban$/i.test(text) && MULTIPLAYER && ws?.readyState === 1) {
+    let password = "";
+    try { password = localStorage.getItem("admin-password") || ""; } catch {}
+    ws.send(JSON.stringify({ t: "mod", action: "unban", password }));
+    return;
+  }
   if (MULTIPLAYER && ws?.readyState === 1)
     ws.send(JSON.stringify({ t: "chat", text }));
   else receiveChat("me", NAME, text); // offline: show only to me
@@ -1388,9 +1445,12 @@ addEventListener("keydown", (e) => {
     elInput.focus();
   } else if (e.key === "Escape" && typing()) elInput.blur();
 });
-elInput.addEventListener("focus", () =>
-  Object.keys(keys).forEach((k) => (keys[k] = false)),
-);
+const idlePlaceholder = elInput.placeholder;
+elInput.addEventListener("focus", () => {
+  Object.keys(keys).forEach((k) => (keys[k] = false));
+  if (!MOBILE) elInput.placeholder = "Esc or empty Enter to walk…";
+});
+elInput.addEventListener("blur", () => !MOBILE && (elInput.placeholder = idlePlaceholder));
 
 function loop() {
   const dt = Math.min(clock.getDelta(), 0.05);

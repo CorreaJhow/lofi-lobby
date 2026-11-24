@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- **Moderation**: bad names are refused, bad chat words become `***`, and the admin can kick or ban by clicking a player's name (`/unban` in the chat lifts bans).
 - **Day and night**: a button in the top card (and the N key) switches the town to daytime and back, with a short fade. Only for you, and remembered.
 - **Mute** button next to "now playing" (and the M key): only for you, remembered, and the radio keeps playing in sync underneath.
 - Chat **send** button (on phones it keeps the keyboard open).
@@ -13,6 +14,7 @@
 - Progressive mute for chat spam (rate exceeded, or the same text 4+ times in a row): warning, then 15 s, 1 min, 5 min, 30 min.
 
 ### Changed
+- The chat box stays open after sending, so you can keep talking; Esc or Enter on an empty box goes back to walking.
 - Room limit raised from 40 to 100 players.
 - A single room, `lobby`: `?room=` is gone and the server refuses other room names, so nobody can open extra rooms to run up the bill.
 

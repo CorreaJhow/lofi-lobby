@@ -34,13 +34,13 @@ Open the URL, pick a trainer and press **enter the room**: the click is what let
 | Arrows / WASD | walk (Shift runs) |
 | M or the speaker button | mute the radio for you |
 | Phone: drag anywhere | walk (push to the edge of the ring to run); **chat** button opens the chat |
-| Enter | open the chat · Esc leaves it |
+| Enter | open the chat; it stays open after sending · Esc or Enter on an empty box goes back to walking |
 | G | switch trainer |
 | N or the day/night button | switch between day and night for you |
 | Space | pause the music for you only |
 
 - There is one room, `lobby`, for everyone (the server refuses any other name).
-- Admin (restart or skip the song for everyone): open once with `?admin=<ADMIN_PASSWORD>`.
+- Admin: open once with `?admin=<ADMIN_PASSWORD>`. Then you can restart or skip the song for everyone, and click a player's name (above them or in the chat) to kick or ban them; `/unban` in the chat lifts every ban.
 - Change the song list in [`src/radio.js`](src/radio.js) (`LISTA`, YouTube video ids).
 
 ## Architecture

@@ -3,10 +3,13 @@
 //   client -> server: { t: "hello", name, gender } | { t: "pos", x, z, dir, step }
 //                     { t: "chat", text } | { t: "name", name } | { t: "gender", gender }
 //                     { t: "radio", idx, password }   (admin)
+//                     { t: "mod", action: "kick"|"ban"|"unban", id, password }   (admin)
 //   server -> client: { t: "you", id } | { t: "state", players: [...] }
 //                     { t: "joined", player } | { t: "left", id } | { t: "pos", ... }
 //                     { t: "chat", id, name, text, at } | { t: "name", id, name }
 //                     { t: "gender", id, gender } | { t: "radio", command } | { t: "error", msg }
+//                     { t: "notice", msg } | { t: "rename", name } (your name was refused)
+//                     { t: "kicked", msg } (the server closes you; don't reconnect)
 //
 // Security (the client is public, so nothing coming from it is trusted):
 //  - max message size, per-connection rate limit, max players per room
@@ -15,6 +18,8 @@
 //  - allowed origins (ALLOWED_ORIGINS) so other sites can't use this server
 //  - per IP: few connections, shared chat budget, admin lockout, progressive mute for spam
 //  - all text is stripped of control characters and truncated; numbers finite and clamped
+//  - word filter: bad names refused, bad chat words become *** (worker/moderation.js)
+//  - admin kick (short IP ban) and ban (long IP ban), kept in storage
 
 const MAX_PLAYERS = 100;
 // v1 has a single room; any other name is refused so nobody can spin up extra rooms (and extra cost)
@@ -24,6 +29,8 @@ const COORD_LIMIT = 500;
 const ADMIN_ATTEMPTS = 5; // per IP, then locked for ADMIN_LOCK_MS
 const ADMIN_LOCK_MS = 15 * 60_000;
 const MAX_PER_IP = 3; // tabs/devices behind one IP
+const KICK_MS = 10 * 60_000; // kick = a short ban, so the client's auto-reconnect doesn't undo it
+const BAN_MS = 7 * 24 * 60 * 60_000;
 // progressive mute: each spam strike mutes for longer; strikes are forgotten after STRIKE_RESET_MS quiet
 const MUTE_STEPS_MS = [0, 15_000, 60_000, 5 * 60_000, 30 * 60_000]; // first strike is only a warning
 const STRIKE_RESET_MS = 30 * 60_000;
@@ -31,6 +38,8 @@ const REPEAT_LIMIT = 3; // the same text more than this many times in a row...
 const REPEAT_WINDOW_MS = 30_000; // ...inside this window counts as spam
 // rate buckets: capacity, refill per second
 const RATES = { pos: [30, 20], chat: [8, 1], other: [10, 1] };
+
+import { badName, cleanChat } from "./moderation.js";
 
 const DIRS = ["down", "up", "left", "right"];
 const cleanText = (s, max) =>
@@ -66,6 +75,8 @@ export class Room {
     if (req.headers.get("Upgrade") !== "websocket") return new Response("expected websocket", { status: 426 });
     if (this.state.getWebSockets().length >= MAX_PLAYERS) return new Response("room is full", { status: 503 });
     const ip = req.headers.get("CF-Connecting-IP") || "local";
+    const ban = await this.state.storage.get("ban:" + ip);
+    if (ban > Date.now()) return new Response("banned", { status: 403 });
     const sameIp = this.state.getWebSockets().filter((w) => w.deserializeAttachment()?.ip === ip).length;
     if (sameIp >= MAX_PER_IP) return new Response("too many connections", { status: 429 });
 
@@ -126,7 +137,7 @@ export class Room {
     }
 
     if (m.t === "hello") {
-      p.name = cleanText(m.name, 16) || "trainer";
+      p.name = this.nameFor(ws, m.name);
       p.gender = gender(m.gender);
       ws.serializeAttachment(p);
       this.broadcast({ t: "joined", player: this.public(p) }, ws);
@@ -135,7 +146,7 @@ export class Room {
       ws.serializeAttachment(p);
       this.broadcast({ t: "gender", id: p.id, gender: p.gender }, ws);
     } else if (m.t === "name") {
-      p.name = cleanText(m.name, 16) || "trainer";
+      p.name = this.nameFor(ws, m.name);
       ws.serializeAttachment(p);
       this.broadcast({ t: "name", id: p.id, name: p.name }, ws);
     } else if (m.t === "pos") {
@@ -145,25 +156,17 @@ export class Room {
       p.step = Math.abs(m.step | 0) % 4;
       ws.serializeAttachment(p);
       this.broadcast({ t: "pos", id: p.id, x: p.x, z: p.z, dir: p.dir, step: p.step }, ws);
+    } else if (m.t === "mod") {
+      if (!(await this.isAdmin(ws, p, m.password))) return;
+      await this.moderate(ws, m.action, cleanText(m.id, 16));
     } else if (m.t === "radio") {
-      // failures counted per IP in storage, so reconnecting doesn't reset them
-      const lockKey = "admin-fail:" + p.ip;
-      const lock = (await this.state.storage.get(lockKey)) || { fails: 0, until: 0 };
-      if (lock.until > Date.now()) return void ws.send(JSON.stringify({ t: "error", msg: "admin locked, try later" }));
-      if (!this.env.ADMIN_PASSWORD || typeof m.password !== "string" || !equal(m.password, this.env.ADMIN_PASSWORD)) {
-        lock.fails = lock.until ? 1 : lock.fails + 1; // a finished lock starts over
-        lock.until = lock.fails >= ADMIN_ATTEMPTS ? Date.now() + ADMIN_LOCK_MS : 0;
-        if (lock.until) lock.fails = 0;
-        await this.state.storage.put(lockKey, lock);
-        ws.send(JSON.stringify({ t: "error", msg: "invalid admin password" }));
-        return;
-      }
-      await this.state.storage.delete(lockKey);
+      if (!(await this.isAdmin(ws, p, m.password))) return;
       const command = { idx: Math.max(0, Math.min(999, m.idx | 0)), at: Date.now() };
       await this.state.storage.put("radio", command);
       this.broadcast({ t: "radio", command });
     } else if (m.t === "chat") {
-      const text = cleanText(m.text, 140);
+      const text = cleanChat(cleanText(m.text, 140));
+      if (text === null) return void ws.send(JSON.stringify({ t: "error", msg: "message blocked" }));
       if (!text) return;
       const now = Date.now();
       const s = this.spamOf(p.ip, now);
@@ -174,6 +177,60 @@ export class Room {
       s.lastAt = now;
       this.broadcast({ t: "chat", id: p.id, name: p.name, text, at: now });
     }
+  }
+
+  // a refused name becomes a random trainer name, and the player is told so it shows the same
+  nameFor(ws, raw) {
+    const name = cleanText(raw, 16) || "trainer";
+    if (!badName(name)) return name;
+    const fallback = "trainer" + Math.floor(Math.random() * 900 + 100);
+    try { ws.send(JSON.stringify({ t: "rename", name: fallback, msg: "that name is not allowed" })); } catch {}
+    return fallback;
+  }
+
+  // failures counted per IP in storage, so reconnecting doesn't reset them
+  async isAdmin(ws, p, password) {
+    const lockKey = "admin-fail:" + p.ip;
+    const lock = (await this.state.storage.get(lockKey)) || { fails: 0, until: 0 };
+    if (lock.until > Date.now()) {
+      ws.send(JSON.stringify({ t: "error", msg: "admin locked, try later" }));
+      return false;
+    }
+    if (!this.env.ADMIN_PASSWORD || typeof password !== "string" || !equal(password, this.env.ADMIN_PASSWORD)) {
+      lock.fails = lock.until ? 1 : lock.fails + 1; // a finished lock starts over
+      lock.until = lock.fails >= ADMIN_ATTEMPTS ? Date.now() + ADMIN_LOCK_MS : 0;
+      if (lock.until) lock.fails = 0;
+      await this.state.storage.put(lockKey, lock);
+      ws.send(JSON.stringify({ t: "error", msg: "invalid admin password" }));
+      return false;
+    }
+    await this.state.storage.delete(lockKey);
+    return true;
+  }
+
+  // kick / ban a player by id: everyone on that player's IP loses the room
+  async moderate(adminWs, action, id) {
+    const tell = (msg) => adminWs.send(JSON.stringify({ t: "notice", msg }));
+    if (action === "unban") {
+      const bans = await this.state.storage.list({ prefix: "ban:" });
+      await this.state.storage.delete([...bans.keys()]);
+      return tell(`unbanned ${bans.size}`);
+    }
+    if (action !== "kick" && action !== "ban") return;
+    const sockets = this.state.getWebSockets();
+    const target = sockets.map((w) => w.deserializeAttachment()).find((p) => p?.id === id);
+    if (!target || adminWs.deserializeAttachment()?.id === id) return tell("that player already left");
+    const name = target.name;
+    const ips = new Set([target.ip]);
+    const until = Date.now() + (action === "ban" ? BAN_MS : KICK_MS);
+    for (const ip of ips) await this.state.storage.put("ban:" + ip, until);
+    const msg = action === "ban" ? "you were banned from the room" : "you were kicked, come back later";
+    for (const w of sockets) {
+      if (w === adminWs || !ips.has(w.deserializeAttachment()?.ip)) continue;
+      try { w.send(JSON.stringify({ t: "kicked", msg })); w.close(4003, action); } catch {}
+      this.leave(w);
+    }
+    tell(`${action === "ban" ? "banned" : "kicked"} ${name}`);
   }
 
   spamOf(ip, now) {
