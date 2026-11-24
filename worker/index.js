@@ -1,6 +1,6 @@
 // Room server: one Durable Object per room, everyone connected over WebSocket.
 // Protocol (JSON):
-//   client -> server: { t: "hello", name, gender } | { t: "pos", x, z, dir, step }
+//   client -> server: { t: "hello", name, gender, x, z, dir } | { t: "pos", x, z, dir, step }
 //                     { t: "chat", text } | { t: "name", name } | { t: "gender", gender }
 //                     { t: "radio", idx, password }   (admin)
 //                     { t: "mod", action: "kick"|"ban"|"unban", id, password }   (admin)
@@ -8,6 +8,7 @@
 //                     { t: "joined", player } | { t: "left", id } | { t: "pos", ... }
 //                     { t: "chat", id, name, text, at } | { t: "name", id, name }
 //                     { t: "gender", id, gender } | { t: "radio", command } | { t: "error", msg }
+//                     { t: "history", messages: [{ id, name, text, at }] } (on join)
 //                     { t: "notice", msg } | { t: "rename", name } (your name was refused)
 //                     { t: "kicked", msg } (the server closes you; don't reconnect)
 //
@@ -31,6 +32,9 @@ const ADMIN_LOCK_MS = 15 * 60_000;
 const MAX_PER_IP = 3; // tabs/devices behind one IP
 const KICK_MS = 10 * 60_000; // kick = a short ban, so the client's auto-reconnect doesn't undo it
 const BAN_MS = 7 * 24 * 60 * 60_000;
+// chat history for people who just arrived: last few messages, only recent ones, never the IP
+const HISTORY_SIZE = 30;
+const HISTORY_MS = 2 * 60 * 60_000;
 // progressive mute: each spam strike mutes for longer; strikes are forgotten after STRIKE_RESET_MS quiet
 const MUTE_STEPS_MS = [0, 15_000, 60_000, 5 * 60_000, 30 * 60_000]; // first strike is only a warning
 const STRIKE_RESET_MS = 30 * 60_000;
@@ -89,6 +93,8 @@ export class Room {
     server.send(JSON.stringify({ t: "you", id }));
     const radio = await this.state.storage.get("radio");
     if (radio) server.send(JSON.stringify({ t: "radio", command: radio }));
+    const messages = await this.history();
+    if (messages.length) server.send(JSON.stringify({ t: "history", messages }));
     server.send(JSON.stringify({ t: "state", players: this.players().filter((p) => p.id !== id) }));
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -139,6 +145,10 @@ export class Room {
     if (m.t === "hello") {
       p.name = this.nameFor(ws, m.name);
       p.gender = gender(m.gender);
+      // where the player already is (a reconnect, or a saved spot), so others see them there at once
+      p.x = number(m.x);
+      p.z = number(m.z);
+      p.dir = DIRS.includes(m.dir) ? m.dir : "down";
       ws.serializeAttachment(p);
       this.broadcast({ t: "joined", player: this.public(p) }, ws);
     } else if (m.t === "gender") {
@@ -175,7 +185,9 @@ export class Room {
       if (s.repeats > REPEAT_LIMIT) return this.strike(ws, p.ip);
       s.lastText = text;
       s.lastAt = now;
-      this.broadcast({ t: "chat", id: p.id, name: p.name, text, at: now });
+      const msg = { id: p.id, name: p.name, text, at: now };
+      this.broadcast({ t: "chat", ...msg });
+      await this.saveHistory([...(await this.history()), msg]);
     }
   }
 
@@ -222,6 +234,9 @@ export class Room {
     if (!target || adminWs.deserializeAttachment()?.id === id) return tell("that player already left");
     const name = target.name;
     const ips = new Set([target.ip]);
+    // a banned player's messages leave the history too
+    const gone = new Set(sockets.map((w) => w.deserializeAttachment()).filter((q) => q && ips.has(q.ip)).map((q) => q.id));
+    await this.saveHistory((await this.history()).filter((m) => !gone.has(m.id)));
     const until = Date.now() + (action === "ban" ? BAN_MS : KICK_MS);
     for (const ip of ips) await this.state.storage.put("ban:" + ip, until);
     const msg = action === "ban" ? "you were banned from the room" : "you were kicked, come back later";
@@ -231,6 +246,15 @@ export class Room {
       this.leave(w);
     }
     tell(`${action === "ban" ? "banned" : "kicked"} ${name}`);
+  }
+
+  // kept in storage so it survives the object sleeping (hibernation)
+  async history() {
+    const all = (await this.state.storage.get("chat")) || [];
+    return all.filter((m) => m.at > Date.now() - HISTORY_MS);
+  }
+  async saveHistory(messages) {
+    await this.state.storage.put("chat", messages.slice(-HISTORY_SIZE));
   }
 
   spamOf(ip, now) {

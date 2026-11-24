@@ -15,7 +15,9 @@ The client is public, so the server trusts nothing it sends.
 - **Moderation:** names with bad words or porn names are refused and replaced by a random `trainer` name; bad chat words become `***`, and messages with blocked names are dropped ([`worker/moderation.js`](worker/moderation.js)). Text is normalized first (accents, leetspeak, repeated letters). The admin clicks a player's name to kick (10-minute IP ban) or ban (7-day IP ban) them, and `/unban` in the chat clears every ban. Bans are per IP, so people sharing an IP are affected together.
 - **Progressive mute** for chat spam, per IP.
 
-What it does not do yet: persistence of chat. Chat is relayed and forgotten. A word list never catches everything; kick and ban cover the rest.
+- **Chat history:** the room keeps the last 30 messages from the last 2 hours (name, text, time; never the IP) so people who just joined can read them. Messages are filtered before they are stored, and a banned player's messages are removed.
+
+A word list never catches everything; kick and ban cover the rest.
 
 ## Reporting a vulnerability
 

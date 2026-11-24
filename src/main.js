@@ -1048,6 +1048,41 @@ canvasEl.addEventListener("pointercancel", releaseStick);
 const pos = new THREE.Vector3(0, 0, 0);
 let dir = "down",
   tAnim = 0;
+// come back where you left: the position is remembered in this browser
+try {
+  const saved = JSON.parse(localStorage.getItem("position") || "null");
+  if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.z)) {
+    pos.set(saved.x, 0, saved.z);
+    if (["down", "up", "left", "right"].includes(saved.dir)) dir = saved.dir;
+  }
+} catch {}
+// a saved spot can be invalid if the town changed: check it once the town exists
+let savedPosChecked = false;
+function checkSavedPosition() {
+  if (savedPosChecked || (!townMeshes.length && !waterMeshes.size)) return;
+  savedPosChecked = true;
+  // judged at the ground height of each spot (unknown when restoring). The saved spot can be a
+  // hair inside a lamp post or the pond edge (movement is checked one axis at a time), so look
+  // for the nearest free spot around it before giving up
+  const free = (x, z) => isFree(x, z, topHeight(x, z));
+  if (free(pos.x, pos.z)) return;
+  for (let r = 0.25; r <= 2; r += 0.25)
+    for (let a = 0; a < Math.PI * 2; a += Math.PI / 8) {
+      const x = pos.x + Math.cos(a) * r, z = pos.z + Math.sin(a) * r;
+      if (free(x, z)) return void pos.set(x, pos.y, z);
+    }
+  pos.set(0, 0, 0);
+}
+let lastSaved = 0,
+  lastSavedState = "";
+function savePosition(now) {
+  if (now - lastSaved < 1000) return;
+  lastSaved = now;
+  const state = JSON.stringify({ x: +pos.x.toFixed(2), z: +pos.z.toFixed(2), dir });
+  if (state === lastSavedState) return;
+  lastSavedState = state;
+  try { localStorage.setItem("position", state); } catch {}
+}
 const SPEED = 9;
 
 const clock = new THREE.Clock();
@@ -1194,7 +1229,7 @@ function connect() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   ws = new WebSocket(`${proto}://${location.host}/ws/${ROOM}`);
   ws.onopen = () =>
-    ws.send(JSON.stringify({ t: "hello", name: NAME, gender: GENDER }));
+    ws.send(JSON.stringify({ t: "hello", name: NAME, gender: GENDER, x: pos.x, z: pos.z, dir }));
   ws.onmessage = (ev) => {
     const m = JSON.parse(ev.data);
     if (m.t === "you") myId = m.id;
@@ -1202,6 +1237,12 @@ function connect() {
     else if (m.t === "joined") createOther(m.player);
     else if (m.t === "left") removeOther(m.id);
     else if (m.t === "chat") receiveChat(m.id, m.name, m.text);
+    else if (m.t === "history") {
+      // what was said before we arrived (also on reconnect, so start clean)
+      elMsgs.replaceChildren();
+      m.messages.forEach((c) => addToHistory(c.name, c.text, c.id));
+      elMsgs.scrollTop = elMsgs.scrollHeight;
+    }
     else if (m.t === "radio") receiveCommand(m.command);
     else if (m.t === "error" || m.t === "notice") addToHistory("system", m.msg);
     else if (m.t === "rename") {
@@ -1454,6 +1495,8 @@ elInput.addEventListener("blur", () => !MOBILE && (elInput.placeholder = idlePla
 
 function loop() {
   const dt = Math.min(clock.getDelta(), 0.05);
+  checkSavedPosition();
+  savePosition(performance.now());
   waterUniforms.uTime.value += dt;
   const dayTarget = isDay ? 1 : 0;
   if (dayAmount !== dayTarget) {
