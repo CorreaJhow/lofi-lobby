@@ -487,15 +487,23 @@ const lampLights = lampPosts.flatMap((p) => p.children.filter((c) => c.isPointLi
 const lampGlows = lampPosts.flatMap((p) => p.children.filter((c) => c.isSprite));
 const mixNum = ([a, b], t) => a + (b - a) * t;
 const mixColor = (target, [a, b], t) => target.copy(a).lerp(b, t);
+const OVERCAST_SKY = new THREE.Color("#7d8794");
+const OVERCAST_LIGHT = new THREE.Color("#a3adbb");
+let rainAmount = 0; // 0 = dry, 1 = full rain (eased in the loop)
 // t: 0 = night, 1 = day
 function applyLook(t) {
   mixColor(scene.background, LOOK.background, t);
+  // overcast: by day the rain greys the sky; at night it only dims a little
+  const overcast = rainAmount * t;
+  scene.background.lerp(OVERCAST_SKY, 0.65 * overcast);
   scene.fog.color.copy(scene.background);
   mixColor(skyLight.color, LOOK.skyTop, t);
+  skyLight.color.lerp(OVERCAST_LIGHT, 0.5 * overcast);
   mixColor(skyLight.groundColor, LOOK.skyGround, t);
-  skyLight.intensity = mixNum(LOOK.skyIntensity, t);
+  const gloom = 1 - (0.2 + 0.2 * t) * rainAmount;
+  skyLight.intensity = mixNum(LOOK.skyIntensity, t) * gloom;
   mixColor(sun.color, LOOK.sunColor, t);
-  sun.intensity = mixNum(LOOK.sunIntensity, t);
+  sun.intensity = mixNum(LOOK.sunIntensity, t) * gloom;
   for (const l of lampLights) l.intensity = mixNum(LOOK.lampIntensity, t);
   for (const g of lampGlows) g.material.opacity = mixNum(LOOK.glowOpacity, t);
   mixColor(lightMaterial.color, LOOK.lantern, t);
@@ -526,6 +534,84 @@ dayNightBtn.addEventListener("click", (e) => {
 addEventListener("keydown", (e) => {
   const typing = ["INPUT", "TEXTAREA"].includes(document.activeElement?.tagName);
   if (!typing && !e.repeat && e.key.toLowerCase() === "n") toggleDayNight();
+});
+
+// Rain: streaks in a box that follows the player. Only for you, remembered (like day/night).
+let isRaining = false;
+try { isRaining = localStorage.getItem("weather") === "rain"; } catch {}
+if (isRaining) {
+  rainAmount = 1;
+  applyLook(dayAmount); // first frame already overcast
+}
+const RAIN = { count: MOBILE ? 500 : 1400, radius: 45, height: 50, fall: 45, wind: 6, length: 1.8 };
+const rainDrops = new Float32Array(RAIN.count * 3); // x, y, z of each drop's head
+for (let i = 0; i < RAIN.count; i++) {
+  rainDrops[i * 3] = (Math.random() * 2 - 1) * RAIN.radius;
+  rainDrops[i * 3 + 1] = Math.random() * RAIN.height;
+  rainDrops[i * 3 + 2] = (Math.random() * 2 - 1) * RAIN.radius;
+}
+const rainLines = new Float32Array(RAIN.count * 6); // head + tail per drop
+const rainGeometry = new THREE.BufferGeometry();
+rainGeometry.setAttribute("position", new THREE.BufferAttribute(rainLines, 3).setUsage(THREE.DynamicDrawUsage));
+const rainMaterial = new THREE.LineBasicMaterial({ color: "#a9c4ff", transparent: true, opacity: 0, depthWrite: false });
+const rainMesh = new THREE.LineSegments(rainGeometry, rainMaterial);
+rainMesh.frustumCulled = false; // positions move every frame
+rainMesh.visible = false;
+scene.add(rainMesh);
+function updateRain(dt) {
+  const target = isRaining ? 1 : 0;
+  if (rainAmount !== target) {
+    rainAmount += Math.sign(target - rainAmount) * Math.min(dt * 0.7, Math.abs(target - rainAmount));
+    applyLook(dayAmount);
+  }
+  rainMesh.visible = rainAmount > 0;
+  if (!rainMesh.visible) return;
+  rainMaterial.opacity = 0.55 * rainAmount;
+  const { radius, height, fall, wind, length } = RAIN;
+  const floor = pos.y;
+  for (let i = 0; i < RAIN.count; i++) {
+    const j = i * 3;
+    let x = rainDrops[j] + wind * dt;
+    let y = rainDrops[j + 1] - fall * dt;
+    let z = rainDrops[j + 2];
+    if (y < floor) y += height;
+    // keep the drops in a box around the player (wrap around its edges)
+    if (x - pos.x > radius) x -= radius * 2;
+    else if (x - pos.x < -radius) x += radius * 2;
+    if (z - pos.z > radius) z -= radius * 2;
+    else if (z - pos.z < -radius) z += radius * 2;
+    rainDrops[j] = x;
+    rainDrops[j + 1] = y;
+    rainDrops[j + 2] = z;
+    const k = i * 6;
+    rainLines[k] = x;
+    rainLines[k + 1] = y;
+    rainLines[k + 2] = z;
+    rainLines[k + 3] = x - (wind / fall) * length;
+    rainLines[k + 4] = y + length;
+    rainLines[k + 5] = z;
+  }
+  rainGeometry.attributes.position.needsUpdate = true;
+}
+const rainBtn = document.querySelector("#rain");
+function drawRain() {
+  const label = isRaining ? "stop the rain" : "make it rain";
+  rainBtn.textContent = MOBILE ? label : `${label} · R`;
+  rainBtn.title = `${label} (R)`;
+}
+function toggleRain() {
+  isRaining = !isRaining;
+  try { localStorage.setItem("weather", isRaining ? "rain" : "clear"); } catch {}
+  drawRain();
+}
+drawRain();
+rainBtn.addEventListener("click", (e) => {
+  toggleRain();
+  e.currentTarget.blur(); // give the keyboard back to the game
+});
+addEventListener("keydown", (e) => {
+  const typing = ["INPUT", "TEXTAREA"].includes(document.activeElement?.tagName);
+  if (!typing && !e.repeat && !e.ctrlKey && !e.metaKey && e.key.toLowerCase() === "r") toggleRain();
 });
 
 let townMeshes = [];
@@ -1553,6 +1639,7 @@ function loop() {
     dayAmount += Math.sign(dayTarget - dayAmount) * Math.min(dt, Math.abs(dayTarget - dayAmount));
     applyLook(dayAmount);
   }
+  updateRain(dt);
   let dx = 0,
     dz = 0;
   if (keys.arrowup || keys.w) {
